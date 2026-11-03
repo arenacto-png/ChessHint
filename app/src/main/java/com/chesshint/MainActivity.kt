@@ -18,6 +18,12 @@ import androidx.compose.material.icons.filled.ContentCopy
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.widget.Toast
+import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.ContentCopy
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.widget.Toast
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -43,7 +49,8 @@ private val SelectColor = Color(0xFFEDC85D)
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        DiagnosticsJournal.initialize(applicationContext)\n        setContent { ChessHintScreen() }
+        DiagnosticsJournal.initialize(applicationContext)
+        setContent { ChessHintScreen() }
     }
 }
 
@@ -51,6 +58,7 @@ class MainActivity : ComponentActivity() {
 private fun ChessHintScreen() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    var showDiagnostics by remember { mutableStateOf(false) }
     var board by remember { mutableStateOf(startBoard()) }
     var selectedPiece by remember { mutableStateOf("♙") }
     var whiteToMove by remember { mutableStateOf(true) }
@@ -60,11 +68,16 @@ private fun ChessHintScreen() {
     val pieces = listOf("♔","♕","♖","♗","♘","♙","♚","♛","♜","♝","♞","♟", "")
 
     MaterialTheme(colorScheme = lightColorScheme(primary = Green, background = Canvas, surface = Color.White, onSurface = Ink)) {
-        Column(Modifier.fillMaxSize().background(Canvas).padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        if (showDiagnostics) {
+            DiagnosticsScreen(onBack = { showDiagnostics = false })
+        } else Column(Modifier.fillMaxSize().background(Canvas).padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("CHESSHINT", color = Green, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
                     Text("Подсказка для вашей партии", color = Ink, fontSize = 23.sp, fontWeight = FontWeight.Bold)
+                }
+                IconButton(onClick = { showDiagnostics = true }) {
+                    Icon(Icons.Default.BugReport, contentDescription = "Диагностика", tint = Green)
                 }
                 Surface(shape = CircleShape, color = Color.White) {
                     Text("♟", modifier = Modifier.padding(10.dp), fontSize = 22.sp)
@@ -126,14 +139,24 @@ private fun ChessHintScreen() {
                 status = "Stockfish анализирует…"
                 scope.launch {
                     try {
-                        val fen = Fen.fromBoard(board, whiteToMove)
-                        val invalidPosition = Fen.validate(board)
-                        if (invalidPosition != null) error(invalidPosition)
-                        val engine = StockfishUci(File(context.applicationInfo.nativeLibraryDir, "libstockfish.so"))
-                        val move = engine.bestMove(fen, 16)
-                        bestMove = move
-                        status = "Лучший ход: ${move.take(2)} → ${move.drop(2).take(2)}${move.getOrNull(4)?.let { "=$it" }.orEmpty()}"
+                        val requestId = DiagnosticsJournal.beginOperation(DiagnosticsJournal.Category.ANALYSIS, "Find best move")
+                        try {
+                            DiagnosticsJournal.log(DiagnosticsJournal.Level.INFO, DiagnosticsJournal.Category.POSITION, "Position analysis requested")
+                            val fen = Fen.fromBoard(board, whiteToMove)
+                            val invalidPosition = Fen.validate(board)
+                            if (invalidPosition != null) error(invalidPosition)
+                            val engine = StockfishUci(File(context.applicationInfo.nativeLibraryDir, "libstockfish.so"))
+                            val move = engine.bestMove(fen, 16)
+                            bestMove = move
+                            status = "Лучший ход: ${move.take(2)} → ${move.drop(2).take(2)}${move.getOrNull(4)?.let { "=$it" }.orEmpty()}"
+                            DiagnosticsJournal.endOperation(requestId, DiagnosticsJournal.Category.ANALYSIS, "Find best move")
+                        } catch (e: Exception) {
+                            DiagnosticsJournal.log(DiagnosticsJournal.Level.ERROR, DiagnosticsJournal.Category.ANALYSIS, "Analysis failed: ${e.message}", requestId, e.stackTraceToString())
+                            DiagnosticsJournal.endOperation(requestId, DiagnosticsJournal.Category.ANALYSIS, "Find best move", "failed")
+                            throw e
+                        }
                     } catch (e: Exception) {
+                        DiagnosticsJournal.log(DiagnosticsJournal.Level.ERROR, DiagnosticsJournal.Category.SYSTEM, "UI analysis handler error: ${e.message}", details = e.stackTraceToString())
                         status = e.message ?: "Не удалось запустить Stockfish"
                     } finally { busy = false }
                 }
@@ -149,6 +172,83 @@ private fun ChessHintScreen() {
             }
             Text("Выберите фигуру, затем клетку. ⌫ удаляет фигуру · Stockfish анализирует локально",
                 color = Color.Gray, fontSize = 10.sp, modifier = Modifier.padding(top = 5.dp))
+        }
+    }
+}
+
+
+@Composable
+private fun DiagnosticsScreen(onBack: () -> Unit) {
+    val context = LocalContext.current
+    var query by remember { mutableStateOf("") }
+    var selectedLevel by remember { mutableStateOf("Все уровни") }
+    var selectedCategory by remember { mutableStateOf("Все категории") }
+    var refreshKey by remember { mutableIntStateOf(0) }
+    val levels = listOf("Все уровни") + DiagnosticsJournal.Level.values().map { it.name }
+    val categories = listOf("Все категории") + DiagnosticsJournal.Category.values().map { it.name }
+    val filtered = remember(query, selectedLevel, selectedCategory, refreshKey) {
+        DiagnosticsJournal.events(
+            level = selectedLevel.takeUnless { it == "Все уровни" }?.let { DiagnosticsJournal.Level.valueOf(it) },
+            category = selectedCategory.takeUnless { it == "Все категории" }?.let { DiagnosticsJournal.Category.valueOf(it) },
+            query = query
+        )
+    }
+    Column(Modifier.fillMaxSize().background(Canvas).padding(16.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, contentDescription = "Назад") }
+            Text("Диагностика", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Ink)
+        }
+        Text("Журнал событий · хранение между запусками", color = Color.Gray, fontSize = 12.sp)
+        Spacer(Modifier.height(10.dp))
+        OutlinedTextField(value = query, onValueChange = { query = it }, label = { Text("Поиск по сообщениям и request_id") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+        Spacer(Modifier.height(8.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            var levelMenu by remember { mutableStateOf(false) }
+            var categoryMenu by remember { mutableStateOf(false) }
+            Box(Modifier.weight(1f)) {
+                OutlinedButton(onClick = { levelMenu = true }, modifier = Modifier.fillMaxWidth()) { Text(selectedLevel, maxLines = 1) }
+                DropdownMenu(expanded = levelMenu, onDismissRequest = { levelMenu = false }) {
+                    levels.forEach { value -> DropdownMenuItem(text = { Text(value) }, onClick = { selectedLevel = value; levelMenu = false }) }
+                }
+            }
+            Box(Modifier.weight(1f)) {
+                OutlinedButton(onClick = { categoryMenu = true }, modifier = Modifier.fillMaxWidth()) { Text(selectedCategory, maxLines = 1) }
+                DropdownMenu(expanded = categoryMenu, onDismissRequest = { categoryMenu = false }) {
+                    categories.forEach { value -> DropdownMenuItem(text = { Text(value) }, onClick = { selectedCategory = value; categoryMenu = false }) }
+                }
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = {
+                val clipboard = context.getSystemService(ClipboardManager::class.java)
+                clipboard?.setPrimaryClip(ClipData.newPlainText("ChessHint diagnostics", DiagnosticsJournal.exportJson()))
+                Toast.makeText(context, "JSON-отчёт скопирован", Toast.LENGTH_SHORT).show()
+            }, modifier = Modifier.weight(1f)) {
+                Icon(Icons.Default.ContentCopy, null); Spacer(Modifier.width(4.dp)); Text("Копировать JSON")
+            }
+            OutlinedButton(onClick = { DiagnosticsJournal.clear(); refreshKey++ }, modifier = Modifier.weight(1f)) {
+                Icon(Icons.Default.DeleteOutline, null); Spacer(Modifier.width(4.dp)); Text("Очистить")
+            }
+        }
+        Text("Событий: ${filtered.size}", color = Color.Gray, fontSize = 12.sp, modifier = Modifier.padding(vertical = 8.dp))
+        androidx.compose.foundation.lazy.LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            items(filtered.size) { index ->
+                val event = filtered[index]
+                Surface(color = Color.White, shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(10.dp)) {
+                        Text("${event.level} · ${event.category}", color = when (event.level) {
+                            DiagnosticsJournal.Level.ERROR -> Color(0xFFB3261E)
+                            DiagnosticsJournal.Level.WARNING -> Color(0xFF8A5A00)
+                            else -> Green
+                        }, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        Text(event.message, color = Ink, fontSize = 13.sp)
+                        Text(event.timestamp, color = Color.Gray, fontSize = 10.sp)
+                        event.requestId?.let { Text("request_id: $it", color = Color.Gray, fontSize = 10.sp) }
+                        event.details?.let { Text(it, color = Color.Gray, fontSize = 11.sp) }
+                    }
+                }
+            }
         }
     }
 }
