@@ -1,0 +1,46 @@
+name: Persist extracted ChessHint source
+
+on:
+  push:
+    branches:
+      - "**"
+    paths:
+      - ".github/workflows/unpack-source.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  unpack:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+
+      - name: Extract project archive into repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s ChessHint-Complete-MVP.zip
+          unzip -o ChessHint-Complete-MVP.zip -d .
+          test -s app/build.gradle.kts
+          test -s settings.gradle.kts || test -s settings.gradle
+
+      - name: Commit extracted source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Keep workflow files out because GITHUB_TOKEN lacks workflows permission.
+          git add -A -- ':!ChessHint-Complete-MVP.zip' ':!.github/workflows/**'
+          if git diff --cached --quiet; then
+            echo "Archive is already extracted; no changes to commit."
+            exit 0
+          fi
+          git commit -m "chore: extract ChessHint project source from archive"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
