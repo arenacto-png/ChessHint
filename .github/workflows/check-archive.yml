@@ -1,0 +1,76 @@
+name: Check ChessHint archive
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Extract project archive
+        run: unzip -o ChessHint-Complete-MVP.zip -d .
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK components
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Download Stockfish Android ARM64 engine
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p app/src/main/jniLibs/arm64-v8a /tmp/stockfish
+          curl --fail --location --retry 3 \
+            https://github.com/official-stockfish/Stockfish/releases/latest/download/stockfish-android-arm64-universal.tar.gz \
+            --output /tmp/stockfish/engine.tar.gz
+          tar -xzf /tmp/stockfish/engine.tar.gz -C /tmp/stockfish
+          ENGINE="$(find /tmp/stockfish -type f -name 'stockfish*' -perm -u+x | head -n 1)"
+          if [ -z "$ENGINE" ]; then
+            ENGINE="$(find /tmp/stockfish -type f -name 'stockfish*' | head -n 1)"
+          fi
+          test -n "$ENGINE"
+          install -m 0755 "$ENGINE" app/src/main/jniLibs/arm64-v8a/libstockfish.so
+
+      - name: Smoke-test Stockfish UCI
+        shell: bash
+        run: |
+          set -euo pipefail
+          ENGINE=app/src/main/jniLibs/arm64-v8a/libstockfish.so
+          OUTPUT="$({ printf 'uci\nisready\nposition startpos\ngo depth 3\n'; sleep 3; printf 'quit\n'; } | "$ENGINE" 2>&1)"
+          echo "$OUTPUT"
+          grep -q 'uciok' <<< "$OUTPUT"
+          grep -q 'readyok' <<< "$OUTPUT"
+          grep -q '^bestmove ' <<< "$OUTPUT"
+
+      - name: Run unit tests
+        run: gradle testDebugUnitTest
+
+      - name: Assemble debug APK
+        run: gradle assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ChessHint-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
