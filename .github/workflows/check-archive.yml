@@ -3,6 +3,8 @@ name: Check ChessHint archive
 on:
   push:
     branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
   workflow_dispatch:
 
 permissions:
@@ -14,9 +16,6 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Extract project archive
-        run: unzip -o ChessHint-Complete-MVP.zip -d .
 
       - name: Align Java and Kotlin JVM targets
         shell: python
