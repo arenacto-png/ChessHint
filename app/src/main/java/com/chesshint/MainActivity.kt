@@ -56,6 +56,7 @@ private fun ChessHintScreen() {
     var showDiagnostics by remember { mutableStateOf(false) }
     var board by remember { mutableStateOf(startBoard()) }
     var selectedPiece by remember { mutableStateOf("♙") }
+    var selectedSquare by remember { mutableStateOf<Int?>(null) }
     var whiteToMove by remember { mutableStateOf(true) }
     var status by remember { mutableStateOf("Выставьте позицию с реальной доски") }
     var busy by remember { mutableStateOf(false) }
@@ -95,9 +96,38 @@ private fun ChessHintScreen() {
                         Box(Modifier.weight(1f).fillMaxHeight()
                             .background(if (bestMove?.take(2) == squareName(index) || bestMove?.drop(2) == squareName(index)) SelectColor else if (isLight) LightSquare else DarkSquare)
                             .clickable {
-                                board = board.toMutableList().also { it[index] = selectedPiece }
+                                val source = selectedSquare
+                                if (source != null) {
+                                    if (source != index) {
+                                        val movingPiece = board[source]
+                                        board = board.toMutableList().also {
+                                            it[source] = ""
+                                            it[index] = movingPiece
+                                        }
+                                        status = "Фигура перемещена: ${squareName(source)} → ${squareName(index)}"
+                                    }
+                                    selectedSquare = null
+                                } else if (board[index].isNotEmpty()) {
+                                    selectedSquare = index
+                                    selectedPiece = board[index]
+                                    status = "Выбрана фигура на ${squareName(index)}"
+                                } else if (selectedPiece.isNotEmpty()) {
+                                    val isWhite = selectedPiece in listOf("♔","♕","♖","♗","♘","♙")
+                                    val colorCount = board.count { it.isNotEmpty() && (it in listOf("♔","♕","♖","♗","♘","♙")) == isWhite }
+                                    val pieceCount = board.count { it == selectedPiece }
+                                    val maxForPiece = if (selectedPiece == "♙" || selectedPiece == "♟") 8 else if (selectedPiece == "♔" || selectedPiece == "♚") 1 else 16
+                                    if (pieceCount >= maxForPiece || colorCount >= 16) {
+                                        status = "Превышен допустимый лимит фигур этого типа или цвета"
+                                        DiagnosticsJournal.log(DiagnosticsJournal.Level.WARNING, DiagnosticsJournal.Category.POSITION, status)
+                                    } else {
+                                        board = board.toMutableList().also { it[index] = selectedPiece }
+                                        status = "Фигура установлена на ${squareName(index)}"
+                                    }
+                                } else {
+                                    board = board.toMutableList().also { it[index] = "" }
+                                    status = "Клетка очищена"
+                                }
                                 bestMove = null
-                                status = "Позиция обновлена"
                             }, contentAlignment = Alignment.Center) {
                             if (c == 0) Text("${8-r}", Modifier.align(Alignment.TopStart).padding(2.dp), fontSize = 9.sp,
                                 color = if (isLight) DarkSquare else LightSquare)
