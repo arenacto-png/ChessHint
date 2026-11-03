@@ -49,11 +49,11 @@ object DiagnosticsJournal {
                 )
                 // Preserve Android's original crash behavior.
                 previousHandler?.uncaughtException(thread, throwable)
-            }.also { previousHandler = it }
+            }
         }
     }
 
-    @Volatile private var previousHandler: Thread.UncaughtExceptionHandler? =
+    private val previousHandler: Thread.UncaughtExceptionHandler? =
         Thread.getDefaultUncaughtExceptionHandler()
 
     fun log(
